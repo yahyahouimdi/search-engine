@@ -1,0 +1,11 @@
+/bin/
+/out/
+*.class
+*.log
+
+# IntelliJ / VS Code / Eclipse files
+.idea/
+.vscode/
+.classpath
+.project
+.settings/
