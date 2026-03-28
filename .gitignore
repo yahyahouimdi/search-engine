@@ -1,11 +1,23 @@
+# Build output
+/build/
 /bin/
 /out/
 *.class
+*.jar
 *.log
 
-# IntelliJ / VS Code / Eclipse files
+# Exported results
+resultats*.csv
+
+# IDE files (IntelliJ / VS Code / Eclipse)
 .idea/
+src/.idea/
+*.iml
 .vscode/
 .classpath
 .project
 .settings/
+
+# OS files
+.DS_Store
+Thumbs.db
