@@ -1,163 +1,246 @@
-# Moteur de Recherche (Name Matching Engine)
+# Moteur de Recherche — Fuzzy Name Matching Engine
 
-A Java project for fuzzy name matching across large CSV datasets.
+![Java](https://img.shields.io/badge/Java-17%2B-orange?logo=openjdk)
+![Swing](https://img.shields.io/badge/GUI-Swing-blue)
+![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)
+![Tests](https://img.shields.io/badge/tests-14%20passing-success)
 
-The application supports:
-- Searching one name against a dataset
-- Comparing two datasets
-- Deduplicating a dataset
-- Configuring preprocessing and similarity strategies
-- Running in both CLI mode and Desktop GUI mode
+A configurable **record-linkage engine** for person names, written in pure Java (no external libraries).
+It finds names that refer to the same person despite typos, different word order, accents or punctuation:
 
-## Project Concept
+| Query             | Match found           | Score |
+|-------------------|-----------------------|-------|
+| `Mustafa Abubakr` | `Mustapha Abubakar`   | 0.90  |
+| `helene dupont`   | `Hélène Dupont`       | 1.00  |
+| `Dawid Boois`     | `Boois, Dawid`        | 1.00  |
 
-This project is a configurable **record linkage / fuzzy matching engine** for person names.
+It supports three operations on CSV files of up to **658,000 names**:
 
-The pipeline is:
-1. Load CSV files (`id`, `name`)
-2. Apply preprocessing chain (lowercase, token sort, remove non-letters)
-3. Generate candidate pairs using indexing strategies
-4. Compute similarity score (Jaro-Winkler, Levenshtein, or exact equality)
-5. Select final matches using a threshold selector
+- 🔎 **Search**: find one name in a dataset
+- 🔗 **Compare**: link the names of dataset A to dataset B
+- 🧹 **Deduplicate**: find duplicates inside one dataset
 
-This architecture is strategy-based, so components can be swapped without rewriting the full engine.
+Both a **desktop GUI** and an **interactive CLI** are provided.
 
-## Features
+![Desktop interface](docs/interface.png)
 
-- Multiple actions:
-  - Search: one query name against dataset
-  - Compare: dataset A vs dataset B
-  - Deduplicate: dataset vs itself
-- Multiple matching strategies:
-  - Jaro-Winkler
-  - Levenshtein
-  - Exact equality
-- Multiple candidate generators:
-  - Token/prefix-based (`Generateur1`)
-  - Length-based (`GenerateurParTaille`)
-- Configurable preprocessing pipeline
-- Similarity threshold filtering
-- GUI result table with execution stats
+---
 
-## Tech Stack
+## Table of contents
 
-- Java (standard library + Swing)
-- CSV input files bundled in `src/`, `bin/`, and `Lib/`
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Project structure](#project-structure)
+- [Usage](#usage)
+- [CSV format](#csv-format)
+- [Performance](#performance)
+- [Tests](#tests)
+- [Roadmap](#roadmap)
 
-## Repository Structure
+---
 
-- `src/`: Java source files and sample CSV datasets
-- `bin/`: compiled artifacts and additional datasets
-- `Lib/`: extra sample dataset files
+## Quick start
 
-Main entry points:
-- `Main` (CLI menu)
-- `InterfaceRecherche` (desktop GUI)
-
-## Requirements
-
-- JDK 17+ recommended (JDK 11+ should also work)
-- Windows, macOS, or Linux
-
-## Build
-
-From project root:
+**Requirement:** JDK 17 or newer (`java -version`).
 
 ```bash
-javac src/*.java
+git clone https://github.com/yahyahouimdi/search-engine.git
+cd search-engine
 ```
 
-On Windows PowerShell:
+| Command (Windows)  | Command (macOS / Linux / Git Bash) | What it does                     |
+|--------------------|------------------------------------|----------------------------------|
+| `run.bat`          | `./run.sh`                         | Compile and open the GUI         |
+| `run.bat cli`      | `./run.sh cli`                     | Compile and start the CLI        |
+| `run.bat test`     | `./run.sh test`                    | Compile and run the test suite   |
+| `run.bat jar`      | `./run.sh jar`                     | Build `build/moteur-de-recherche.jar` |
 
-```powershell
-javac src\*.java
-```
-
-## Run
-
-### 1) Desktop GUI (recommended)
-
-From project root:
+<details>
+<summary>Without the scripts (plain <code>javac</code>)</summary>
 
 ```bash
-java -cp src InterfaceRecherche
+mkdir -p build/classes
+javac -encoding UTF-8 -d build/classes $(find src/main/java -name "*.java")
+java -cp build/classes moteur.ui.InterfaceRecherche     # GUI
+java -cp build/classes moteur.cli.Main                  # CLI
 ```
 
-The GUI lets you:
-- choose action (search / compare / deduplicate)
-- choose dataset(s)
-- enter query name
-- choose comparator and generator
-- set threshold and max results
-- view results in a table
+</details>
 
-### Interface Demonstration
+---
 
-![Interface demonstration](src/interface%20demonstration.png)
+## How it works
 
-### 2) CLI menu
+Every operation runs the same four-stage pipeline. Each stage is an **interface** (strategy pattern),
+so an implementation can be swapped without touching the engine:
 
-From project root:
-
-```bash
-java -cp src Main
+```mermaid
+flowchart LR
+    A[CSV files] --> B[1. Preprocessing<br/><i>Pretraiteur</i>]
+    B --> C[2. Candidate generation<br/><i>GenerateurDeCandidat</i>]
+    C --> D[3. Scoring<br/><i>Comparateur</i>]
+    D --> E[4. Selection<br/><i>Selectionneur</i>]
+    E --> F[Ranked matches]
 ```
 
-## CSV Format
+| Stage | Purpose | Implementations |
+|-------|---------|-----------------|
+| **Preprocessing** | Normalize names before comparing them | Lower case · Remove accents (`é → e`) · Remove punctuation & digits · Sort words (`Boois Dawid` = `Dawid Boois`) |
+| **Candidate generation** (blocking) | Avoid comparing every name with every other one (658k² ≈ 433 billion pairs) | **By shared word prefix**: inverted index on the first 3 letters of each word · **By length**: only names whose lengths are within 20% |
+| **Scoring** | Similarity between 0 and 1 | **Jaro-Winkler** (good for short strings and typos, rewards common prefixes) · **Levenshtein** (`1 - edit distance / max length`) · **Exact equality** |
+| **Selection** | Keep the relevant pairs, best first | **Threshold** (score ≥ s) · **Top N** · **All** |
 
-Expected columns:
-1. `id`
-2. `name`
+Large inputs are processed **in blocks** to bound memory. In deduplication mode, self-matches and mirrored pairs (`A↔B` / `B↔A`) are removed.
 
-The loader skips the first line as header.
+---
 
-Example:
+## Project structure
+
+```
+.
+├── data/                     # Sample datasets: peps_names_800.csv … peps_names_658k.csv
+├── docs/interface.png        # GUI screenshot used in this README
+├── src/main/java/moteur/     # Application sources (34 classes, 10 packages)
+├── src/test/java/moteur/     # Test suite
+├── run.bat / run.sh          # Build & run scripts (gui | cli | test | jar)
+├── .gitattributes            # Line endings (CRLF for .bat, LF for the rest)
+└── README.md
+```
+
+The `moteur` packages map one-to-one onto the pipeline stages, plus the two front ends:
+
+| Package | Class | Role |
+|---------|-------|------|
+| `moteur` | `MoteurDeRecherche` | Runs the pipeline: `rechercher`, `comparer`, `dedupliquer`; processes large inputs in blocks |
+| | `Configuration` | Holds the four strategies; `parDefaut()` gives the recommended setup |
+| `moteur.modele` | `Nom` | One record: ID, normalized name, original name (shown in results) |
+| | `CoupleDeString` | Raw CSV row (`id`, `name`) |
+| | `CoupleDeNom` | A candidate pair of names to compare |
+| | `NomAvecScore` | A pair with its similarity score |
+| | `ListeDesNoms` / `ListePretraiter` / `ListeGeneree` | Data between stages: raw rows → normalized names → candidate pairs |
+| `moteur.recuperation` | `Recuperateur` | Interface: data source |
+| | `RecuperateurFichierCsv` | UTF-8 CSV reader with quoted-field support |
+| | `Datasets` | Finds CSV files in `data/` and resolves file names |
+| `moteur.pretraitement` | `Pretraiteur` | Interface: `String → String` normalization step |
+| | `PretraiteurToLowerCase` | `Houda AMER` → `houda amer` |
+| | `PretraiteurSansAccents` | `Hélène` → `Helene` |
+| | `PretraiteurSansCaracteresNiChiffres` | `Boois, Dawid (2)` → `Boois Dawid` |
+| | `PretraiteurAvecTokenisation` | Sorts words: `dawid boois` → `boois dawid` |
+| `moteur.generation` | `GenerateurDeCandidat` | Interface: picks which pairs are worth comparing |
+| | `GenerateurParToken` | Pairs names sharing a word prefix (first 3 letters) |
+| | `GenerateurParTaille` | Pairs names whose lengths are within 20% |
+| `moteur.comparaison` | `ComparateurDeChaine` | Interface: string similarity in [0, 1] |
+| | `ComparateurAvecJaroWinkler` | Jaro-Winkler similarity |
+| | `ComparateurAvecLevenshtein` | `1 - edit distance / max length` |
+| | `Comparateur` | Interface: name similarity in [0, 1] |
+| | `ComparateurDeNomParChaine` | Adapts any `ComparateurDeChaine` to names |
+| | `ComparateurSimple` | Exact equality (1 or 0) |
+| `moteur.selection` | `Selectionneur` | Interface: filters and ranks scored pairs |
+| | `SelectionneurParSeuil` | Keeps scores ≥ threshold |
+| | `SelectionneurDesNmeilleurs` | Keeps the N best |
+| | `SelectionneurTout` | Keeps everything, sorted |
+| | `ComparateurDeScore` | Orders by descending score |
+| `moteur.util` | `AnalyseMemoire` | Memory usage statistics |
+| `moteur.cli` | `Main` | Interactive command-line menu |
+| `moteur.ui` | `InterfaceRecherche` | Swing desktop interface |
+| *(tests)* | `TestsMoteur` | 14 dependency-free tests (algorithms, preprocessing, CSV, end-to-end) |
+
+---
+
+## Usage
+
+### Desktop GUI
+
+1. Choose an **action**: search, compare or deduplicate.
+2. Choose the **dataset(s)**. Files in `data/` are listed automatically; use **…** to open any other CSV.
+3. For a search, type the **name**, then press <kbd>Enter</kbd>.
+4. Optionally adjust the **comparator**, **generator**, **preprocessing** and **threshold**.
+
+Results can be **sorted** by any column, **filtered** live, and **exported to CSV**.
+The status bar shows dataset size, execution time and memory used. Loaded datasets are cached, so later runs are faster.
+
+### CLI
+
+```
+==================================================
+            MOTEUR DE RECHERCHE DE NOMS
+==================================================
+  Fichier principal  : peps_names_8k.csv
+  Fichier secondaire : peps_names_2k.csv
+  Comparateur        : Jaro-Winkler (seuil 0.80)
+  ...
+  1. Rechercher un nom dans le fichier principal
+  2. Comparer le fichier principal au fichier secondaire
+  3. Dédupliquer le fichier principal
+  4. Configurer la recherche
+  5. Changer de fichiers
+  0. Quitter
+```
+
+The datasets can also be passed as arguments: `run.bat cli peps_names_658k.csv peps_names_32k.csv`.
+
+### As a library
+
+```java
+MoteurDeRecherche moteur = new MoteurDeRecherche(Configuration.parDefaut());
+
+ListeDesNoms reference = new ListeDesNoms(new RecuperateurFichierCsv("peps_names_8k.csv").recuperer());
+ListeDesNoms requete   = new ListeDesNoms(List.of(new CoupleDeString("Q1", "Mustafa Abubakr")));
+
+for (NomAvecScore r : moteur.rechercher(requete, reference)) {
+    System.out.println(r.getScore() + "  " + r.getCouple().getNom2().getNomOriginal());
+}
+```
+
+---
+
+## CSV format
+
+UTF-8, two columns, with a header line:
 
 ```csv
 id,name
-1234,Houda Amer
-9876,Mustapha Abubakar
+NK-2wf3y8pBpVqPuU4neGTVbY,Mustapha Abubakar
+NK-Lk3jsaKE9r5KNq5dwXoVUw,"Boois, Dawid"
 ```
 
-## Configuration Notes
+Quoted fields may contain commas. Incomplete lines are skipped.
 
-- Threshold is used by `SelectionneurParSeuil`.
-- Preprocessing order can affect scores and result ranking.
-- Large datasets can increase memory usage depending on generation strategy.
+---
 
-## Troubleshooting
+## Performance
 
-### Class not found / `Main` not found
-Use classpath with `src` from project root:
+Measured on a laptop (JDK 17, Jaro-Winkler, default preprocessing, prefix generator):
+
+| Operation | Dataset | Time |
+|-----------|---------|------|
+| Search one name | 8,000 names | ~0.3 s |
+| Search one name | 658,000 names | ~3.6 s (including loading the 31 MB file) |
+| Deduplicate | 8,000 names | ~1.2 s |
+
+For big comparisons or deduplications, give the JVM more memory, for example
+`java -Xmx4g -cp build/classes moteur.ui.InterfaceRecherche`.
+
+---
+
+## Tests
 
 ```bash
-java -cp src Main
+./run.sh test        # or run.bat test
 ```
 
-### CSV file not found
-`Recuperateurfichecsv` resolves files from common project paths (`.`, `src`, `bin`, `Lib`, `src/Lib`, `bin/Lib`).
+Covers the reference values of Jaro-Winkler (`MARTHA/MARHTA = 0.961`) and Levenshtein (`kitten/sitting = 3`),
+every preprocessor, CSV parsing with quoted commas, and end-to-end search, comparison and deduplication.
 
-### Garbled French characters in Windows terminal
-Use UTF-8 in PowerShell:
+---
 
-```powershell
-chcp 65001
-$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-java -Dfile.encoding=UTF-8 -cp src Main
-```
+## Roadmap
 
-## Future Improvements
-
-- Export results to CSV/JSON
-- Better ranking and blocking strategies
-- Unit and integration test suite
-- Maven/Gradle build and dependency management
-- Logging and profiling dashboards
-
-## License
-
-Add your preferred license (for example, MIT) before publishing.
+- [ ] Phonetic preprocessing (Soundex / Metaphone)
+- [ ] Parallel scoring of candidate pairs
+- [ ] Maven / Gradle build and JUnit
+- [ ] Configurable CSV columns and separator
 
 ## Author
 
-Project by the repository owner.
+**Yahya Houimdi** — [github.com/yahyahouimdi](https://github.com/yahyahouimdi)
